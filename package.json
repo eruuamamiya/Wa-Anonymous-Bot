@@ -1,0 +1,19 @@
+{
+  "name": "waanonymous",
+  "version": "1.0.0",
+  "description": "bot anonymous",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "author": "Neko Developer",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "axios": "^1.18.1",
+    "body-parser": "^2.3.0",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
