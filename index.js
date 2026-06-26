@@ -6,17 +6,19 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-// FIX 1: Deklarasi variabel antrean chat anonim secara global
-let searchQueue = [];
+// STRUKTUR DATA
+let searchQueue = []; // Berisi: { id: sender, myGender: 'cowok'/'cewek'/'belum diatur', lookingFor: 'cowok'/'cewek'/'random' }
 const activeSessions = {};
+const userProfiles = {}; // Format: { 'nomorWA': 'cowok' }
+const knownUsers = new Set(); // BUKU TAMU: Untuk mencatat user yang sudah pernah chat bot
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // FIX 2: Matikan bawaan Baileys agar tidak double QR
-        browser: ["Windows", "Chrome", "110.0.0"] // FIX 4: Gunakan identitas browser standar biar aman
+        printQRInTerminal: false,
+        browser: ["Windows", "Chrome", "110.0.0"]
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -24,18 +26,16 @@ async function startBot() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // Render QR manual yang stabil di terminal
         if (qr) {
             console.log('--- SCAN QR CODE DI BAWAH INI ---');
             qrcode.generate(qr, { small: true });
         }
         
         if (connection === 'open') {
-            console.log('\n✅ WhatsApp Terhubung! Bot Anonymous siap digunakan.');
+            console.log('\n✅ WhatsApp Terhubung! Bot Anonymous NekoGanz siap digunakan.');
         }
         
         if (connection === 'close') {
-            // FIX 3: Gunakan ?. agar tidak crash jika lastDisconnect kosong
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log(`Koneksi terputus karena: ${lastDisconnect?.error}. Mencoba menghubungkan kembali: ${shouldReconnect}`);
             if (shouldReconnect) {
@@ -44,7 +44,6 @@ async function startBot() {
         }
     });
 
-    // Menangani pesan masuk
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
@@ -53,36 +52,123 @@ async function startBot() {
         const sender = msg.key.remoteJid; 
         const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || "";
         const command = textMessage.toLowerCase().trim();
+        const args = command.split(' ');
+        const cmd = args[0]; 
 
-        // 1. Perintah Cari Pasangan
-        if (command === '/search' || command === '/start') {
+        // ==========================================
+        // FITUR WELCOME MESSAGE (PESAN PERTAMA KALI)
+        // ==========================================
+        if (!knownUsers.has(sender)) {
+            knownUsers.add(sender); // Masukkan nomor ke buku tamu
+            
+            const welcomeMsg = `👋 *Halo! Selamat datang di Bot Anonymous by NekoGanz!*\n\n` +
+                               `Di sini kamu bisa mencari teman ngobrol baru secara rahasia dan aman.\n\n` +
+                               `Ketik */info* untuk melihat cara menggunakannya, atau langsung ketik */search* untuk mulai mencari teman ngobrol acak.\n\n` +
+                               `Selamat bersenang-senang! 🎉`;
+                               
+            await sock.sendMessage(sender, { text: welcomeMsg });
+            
+            // Beri sedikit jeda agar pesan welcome terkirim lebih dulu jika user langsung mengetik command
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        // ==========================================
+
+        // 1. Perintah Set Profil / Gender (Opsional)
+        if (cmd === '/setgender') {
+            const gender = args[1];
+            if (gender === 'cowok' || gender === 'cewek') {
+                userProfiles[sender] = gender;
+                await sock.sendMessage(sender, { text: `✅ Gender kamu berhasil diatur sebagai *${gender}*.\nSekarang kamu lebih mudah ditemukan oleh orang yang mencari spesifik gendermu.` });
+            } else {
+                await sock.sendMessage(sender, { text: "⚠️ Format salah! Ketik: */setgender cowok* atau */setgender cewek*" });
+            }
+            return;
+        }
+
+        // 2. Perintah Cari Pasangan
+        const searchCommands = ['/search', '/start', '/next', '/search-man', '/search-woman', '/next-man', '/next-woman'];
+        if (searchCommands.includes(cmd)) {
+            
+            if (cmd.startsWith('/next')) {
+                const currentPartner = activeSessions[sender];
+                if (currentPartner) {
+                    delete activeSessions[sender];
+                    delete activeSessions[currentPartner];
+                    await sock.sendMessage(currentPartner, { text: "🛑 Pasanganmu telah meninggalkan obrolan." });
+                }
+            }
+
             if (activeSessions[sender]) {
                 await sock.sendMessage(sender, { text: "⚠️ Kamu masih dalam obrolan aktif. Ketik /stop untuk keluar dulu." });
                 return;
             }
-            if (searchQueue.includes(sender)) {
+            if (searchQueue.some(user => user.id === sender)) {
                 await sock.sendMessage(sender, { text: "⏳ Kamu sudah ada di antrean. Menunggu pasangan..." });
                 return;
             }
 
-            if (searchQueue.length > 0) {
-                const partner = searchQueue.shift(); 
-                activeSessions[sender] = partner;
-                activeSessions[partner] = sender;
-                await sock.sendMessage(sender, { text: "✅ Pasangan ditemukan! Mulai mengobrol sekarang. (Ketik /stop untuk mengakhiri)" });
-                await sock.sendMessage(partner, { text: "✅ Pasangan ditemukan! Mulai mengobrol sekarang. (Ketik /stop untuk mengakhiri)" });
+            const myGender = userProfiles[sender] || 'belum diatur';
+            
+            let lookingFor = 'random';
+            if (cmd === '/search-man' || cmd === '/next-man') lookingFor = 'cowok';
+            if (cmd === '/search-woman' || cmd === '/next-woman') lookingFor = 'cewek';
+
+            let matchIndex = -1;
+            for (let i = 0; i < searchQueue.length; i++) {
+                const potentialPartner = searchQueue[i];
+
+                const matchMyCriteria = (lookingFor === 'random' || potentialPartner.myGender === lookingFor);
+                const matchTheirCriteria = (potentialPartner.lookingFor === 'random' || myGender === potentialPartner.lookingFor);
+
+                if (matchMyCriteria && matchTheirCriteria) {
+                    matchIndex = i;
+                    break;
+                }
+            }
+                        if (matchIndex !== -1) {
+                const partner = searchQueue.splice(matchIndex, 1)[0]; 
+                activeSessions[sender] = partner.id;
+                activeSessions[partner.id] = sender;
+
+                const partnerGenderText = (partner.myGender === 'cowok' || partner.myGender === 'cewek') ? partner.myGender : 'belum diatur';
+                const myGenderText = (myGender === 'cowok' || myGender === 'cewek') ? myGender : 'belum diatur';
+
+                // 1. Tentukan judul pesan untuk SENDER (Orang yang baru saja mengetik command)
+                let senderTitle = `✅ Partner ditemukan! Anda bisa mulai mengobrol.`;
+                if (lookingFor !== 'random') {
+                    // Jika sender mencari spesifik, tampilkan gendernya
+                    senderTitle = `✅ Partner (*${partnerGenderText}*) ditemukan! Anda bisa mulai mengobrol.`;
+                }
+
+                // 2. Tentukan judul pesan untuk PARTNER (Orang yang tadi sedang menunggu di antrean)
+                let partnerTitle = `✅ Partner ditemukan! Anda bisa mulai mengobrol.`;
+                if (partner.lookingFor !== 'random') {
+                    // Jika partner mencari spesifik, tampilkan gendernya
+                    partnerTitle = `✅ Partner (*${myGenderText}*) ditemukan! Anda bisa mulai mengobrol.`;
+                }
+
+                // 3. Gabungkan dengan menu footer standar
+                const footerMenu = `\n\n/next – partner berikutnya\n/stop – akhiri chat\n\nhttps://wa.me/6285608637146`;
+
+                const connectMsgSender = senderTitle + footerMenu;
+                const connectMsgPartner = partnerTitle + footerMenu;
+
+                await sock.sendMessage(sender, { text: connectMsgSender });
+                await sock.sendMessage(partner.id, { text: connectMsgPartner });
                 return;
             } else {
-                searchQueue.push(sender);
-                await sock.sendMessage(sender, { text: "🔍 Mencari pasangan... Silakan tunggu." });
+                searchQueue.push({ id: sender, myGender: myGender, lookingFor: lookingFor });
+                
+                const searchMsg = lookingFor === 'random' ? "🔍 Mencari pasangan secara acak..." : `🔍 Mencari pasangan (*${lookingFor}*)...`;
+                await sock.sendMessage(sender, { text: searchMsg + " Silakan tunggu." });
                 return;
             }
         }
 
-        // 2. Perintah Berhenti Chat
-        if (command === '/stop' || command === '/next') {
-            if (searchQueue.includes(sender)) {
-                searchQueue = searchQueue.filter(id => id !== sender);
+        // 3. Perintah Berhenti Chat
+        if (cmd === '/stop') {
+            if (searchQueue.some(user => user.id === sender)) {
+                searchQueue = searchQueue.filter(user => user.id !== sender);
                 await sock.sendMessage(sender, { text: "❌ Pencarian dihentikan." });
                 return;
             }
@@ -91,22 +177,43 @@ async function startBot() {
                 delete activeSessions[sender];
                 delete activeSessions[partner];
                 await sock.sendMessage(sender, { text: "🛑 Obrolan dihentikan." });
-                await sock.sendMessage(partner, { text: "🛑 Pasanganmu telah meninggalkan obrolan." });
-                if (command === '/next') {
-                     searchQueue.push(sender);
-                     await sock.sendMessage(sender, { text: "🔍 Mencari pasangan baru... Silakan tunggu." });
-                }
+                await sock.sendMessage(partner, { text: "Pasanganmu telah menghentikan obrolan 😞\nKetik /search untuk menemukan pasangan baru." });
                 return;
             }
             await sock.sendMessage(sender, { text: "Kamu tidak sedang mengobrol. Ketik /search untuk mencari teman." });
             return;
         }
 
-        // 3. Meneruskan Pesan
+                // 4. Perintah Info Bot
+        if (cmd === '/info') {
+            const infoMessage = `🤖 *INFORMASI BOT ANONYMOUS* 🤖\n\n` +
+                                `Ngobrol santai tanpa identitas! Bebas pilih mau chat random atau spesifik.\n\n` +
+                                `📋 *Daftar Command:*\n` +
+                                `* *\/search* : Cari pasangan secara acak.\n` +
+                                `* *\/search-man* : Khusus mencari cowok.\n` +
+                                `* *\/search-woman* : Khusus mencari cewek.\n` +
+                                `* *\/next* : Skip dan cari acak.\n` +
+                                `* *\/next-man* / *\/next-woman* : Skip dan cari spesifik.\n` +
+                                `* *\/setgender <cowok/cewek>* : Atur gendermu agar mudah ditemukan.\n` +
+                                `* *\/stop* : Hentikan obrolan atau pencarian.\n` +
+                                `* *\/info* : Menampilkan pesan ini.\n\n` +
+                                `👨‍💻 *Informasi Developer:*\n` +
+                                `Dikembangkan oleh: *NekoGanz*\n` +
+                                `Hubungi: +6281287892264\n\n` +
+                                `💡 _Tips: Jaga privasi dan selalu sopan ya!_`;
+            
+            // MENGIRIM GAMBAR DENGAN CAPTION
+            await sock.sendMessage(sender, { 
+                image: { url: 'https://i.ibb.co.com/tMQFng80/wallpapersden-com-himiko-toga-digital-my-hero-academia-1280x720.jpg' }, // Ganti dengan path file lokal atau link gambar online
+                caption: infoMessage 
+            });
+            return;
+        }
+
+        // 5. Meneruskan Pesan (Forwarding)
         const partner = activeSessions[sender];
-        if (partner && !command.startsWith('/')) {
+        if (partner && !cmd.startsWith('/')) {
             try {
-                // Meneruskan pesan secara anonim
                 await sock.sendMessage(partner, { forward: msg });
             } catch (error) {
                 console.error("Gagal meneruskan pesan:", error);
@@ -114,15 +221,12 @@ async function startBot() {
             return;
         }
 
-        // 4. Default
-        if (!partner && !command.startsWith('/')) {
-            await sock.sendMessage(sender, { text: "Halo! Ketik /search untuk mulai mengobrol secara anonim." });
+        // 6. Default (Jika belum masuk chat dan ketik sembarangan)
+        if (!partner && !cmd.startsWith('/')) {
+            // Karena sudah ada Welcome Message, kita bisa buat pesan default ini lebih simpel
+            await sock.sendMessage(sender, { text: "Ketik */search* untuk ngobrol, atau ketik */info* untuk bantuan." });
         }
     });
 }
 
-// Menjalankan bot
 startBot();
-
-// Catatan: Express dideklarasikan tapi belum di-listen. 
-// Jika butuh port monitoring (misal untuk Replit/Koyeb), tambahkan app.listen(3000) di bawah sini.
