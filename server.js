@@ -63,8 +63,7 @@ async function startBot() {
         if (!knownUsers.has(sender)) {
             knownUsers.add(sender); 
             
-            const welcomeMsg = `👋 *Halo! Selamat datang di Bot Downloader NekoGanz!*\n\n` +
-                               `Bot ini menggunakan core mandiri (yt-dlp) sehingga terbebas dari limit harian API pihak ketiga.\n\n` +
+            const welcomeMsg = `👋 *Halo! Selamat datang di NekoFlux.BOT!*\n\n` +
                                `Ketik */menu* untuk melihat daftar perintah.\n\n` +
                                `Selamat mencoba! 🎉`;
 
@@ -76,7 +75,7 @@ async function startBot() {
             await new Promise(resolve => setTimeout(resolve, 1000));
           
             await sock.sendMessage(sender, {
-                audio: { url: 'LINK_AUDIO_ATAU_PATH_LOKAL_DISINI.mp3' },
+                audio: { url: 'raw.githubusercontent.com/eruuamamiya/Wa-Anonymous-Bot/refs/heads/main/music.mp3' },
                 mimetype: 'audio/mp4',
                 ptt: true
             });
