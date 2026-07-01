@@ -1,6 +1,6 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadContentFromMessage } = require("@whiskeysockets/baileys");
 const { Sticker, StickerTypes } = require("wa-sticker-formatter");
-const { spawn } = require("child_process"); // Gw ubah ke spawn khusus untuk streaming (biar ga nyimpen di STB)
+const { spawn } = require("child_process");
 const qrcode = require("qrcode-terminal");
 const express = require("express");
 
@@ -10,7 +10,6 @@ app.use(express.json());
 const knownUsers = new Set(); 
 
 function extractVideoStream(url, options = []) {
-    // -q (quiet) biar log terminal ga penuh, -o - (output ke stdout) biar ga disimpen ke disk STB
     const args = ['-q', ...options, '-o', '-', url];
     const yt = spawn('yt-dlp', args);
     return yt.stdout;
