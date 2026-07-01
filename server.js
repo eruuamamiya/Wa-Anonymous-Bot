@@ -75,7 +75,7 @@ async function startBot() {
             await new Promise(resolve => setTimeout(resolve, 1000));
           
             await sock.sendMessage(sender, {
-                audio: { url: 'raw.githubusercontent.com/eruuamamiya/Wa-Anonymous-Bot/refs/heads/main/music.mp3' },
+                audio: { url: 'https://raw.githubusercontent.com/eruuamamiya/Wa-Anonymous-Bot/refs/heads/main/music.mp3' },
                 mimetype: 'audio/mp4',
                 ptt: true
             });
